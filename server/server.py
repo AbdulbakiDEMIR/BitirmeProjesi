@@ -1,65 +1,70 @@
 import asyncio
 import websockets
-import uuid
 import pickle
 from ML_class import Server
 
-
+# Sabit port numarası
 PORT = 7896
-print("Server listening on port " + str(PORT))
 
+def log(message):
+    """Konsola bilgilendirici mesaj basar."""
+    print(f"[SERVER] {message}")
 
-federe_model = Server()
+log(f"Sunucu {PORT} portunda dinliyor...")
 
-federe_model.check_save_model()
+# Federated model nesnesi oluşturuluyor
+federated_model = Server()
+federated_model.check_save_model()
 
-
-async def echo(websocket):
-    
+async def handle_websocket(websocket):
+    """
+    Her istemci bağlantısında tetiklenen ana fonksiyon.
+    Gelen mesajları alır, modele göre cevap döner veya modeli günceller.
+    """
     try:
-        # api mesajı (modeller)
+        # İstemciden mesaj bekle
         recv = await websocket.recv()
         data = pickle.loads(recv)
-        first = data["first"]
-        if(not first):
-            models = data['models']
 
-            # modelleri birleştir
-            federe_model.fed_avg(models)
-            #modeli gönder
-            federe_model.send_model()
+        # İlk bağlantı mı, yoksa model birleştirme mi?
+        is_first_request = data.get("first", False)
+
+        if not is_first_request:
+            # Model birleştirme isteği
+            models = data.get('models', [])
+            log("Model birleştirme isteği alındı.")
+
+            federated_model.fed_avg(models)     # Modelleri birleştir
+            federated_model.send_model()        # Yeni modeli gönder
+            log("Model birleştirildi ve gönderildi.")
 
         else:
-            if(federe_model.version > 0):
-                data = {
-                    'version': federe_model.version,
-                    'model':federe_model.model
-                }
-
-                send_data = pickle.dumps(data)
-
+            # Sunucudaki modeli gönderme isteği
+            if federated_model.version > 0:
+                log(f"Model (versiyon {federated_model.version}) gönderiliyor.")
+                send_data = pickle.dumps({
+                    'version': federated_model.version,
+                    'model': federated_model.model
+                })
                 await websocket.send(send_data)
-                
             else:
-                data = {
-                    'version': 0
-                }
-                send_data = pickle.dumps(data)
+                log("Henüz bir model yok, versiyon 0 gönderiliyor.")
+                send_data = pickle.dumps({'version': 0})
                 await websocket.send(send_data)
 
     except websockets.exceptions.ConnectionClosed as e:
-        print(f"API disconnected.")
-        print(e)
-
-    
-
-
-
+        log("Bir istemci bağlantısı kapandı.")
+        log(str(e))
+    except Exception as e:
+        log(f"Hata oluştu: {e}")
 
 async def main():
-    # Sunucu görevini ve arka plan görevini aynı anda çalıştırıyoruz.
-    async with websockets.serve(echo, "localhost", PORT):
-        await asyncio.Future()
+    """
+    WebSocket sunucusunu başlatır.
+    """
+    async with websockets.serve(handle_websocket, "localhost", PORT):
+        log("WebSocket sunucusu başlatıldı.")
+        await asyncio.Future()  # Sunucu sürekli çalışsın
 
 if __name__ == '__main__':
     asyncio.run(main())
